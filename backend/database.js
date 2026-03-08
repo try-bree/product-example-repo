@@ -1,17 +1,56 @@
-const Database = require('better-sqlite3');
-const path = require('path');
+const initSqlJs = require('sql.js');
 
-// Database file path - will be created automatically
-const dbPath = path.join(__dirname, 'interview.db');
 let db;
 
-// Initialize database with tables and sample data
-function initializeDatabase() {
-  console.log('🗄️  Initializing SQLite database...');
+// Wrapper that provides a clean API over sql.js
+// Methods mirror better-sqlite3 patterns: get(), all(), run()
+function createWrapper(rawDb) {
+  return {
+    get(sql, params = []) {
+      const stmt = rawDb.prepare(sql);
+      stmt.bind(params);
+      let result;
+      if (stmt.step()) {
+        result = stmt.getAsObject();
+      }
+      stmt.free();
+      return result;
+    },
 
-  db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  console.log('✅ Connected to SQLite database at:', dbPath);
+    all(sql, params = []) {
+      const stmt = rawDb.prepare(sql);
+      stmt.bind(params);
+      const rows = [];
+      while (stmt.step()) {
+        rows.push(stmt.getAsObject());
+      }
+      stmt.free();
+      return rows;
+    },
+
+    run(sql, params = []) {
+      rawDb.run(sql, params);
+      const changes = rawDb.getRowsModified();
+      const result = rawDb.exec("SELECT last_insert_rowid()");
+      const lastInsertRowid = result[0]?.values[0]?.[0] ?? 0;
+      return { changes, lastInsertRowid };
+    },
+
+    exec(sql) {
+      rawDb.exec(sql);
+    }
+  };
+}
+
+// Initialize database with tables and sample data
+async function initializeDatabase() {
+  console.log('Initializing in-memory SQLite database (sql.js)...');
+
+  const SQL = await initSqlJs();
+  const rawDb = new SQL.Database();
+  db = createWrapper(rawDb);
+
+  console.log('Connected to in-memory SQLite database');
 
   // Create tables
   db.exec(`
@@ -24,7 +63,7 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('✅ Users table ready');
+  console.log('Users table ready');
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS loans (
@@ -41,7 +80,7 @@ function initializeDatabase() {
       FOREIGN KEY (user_id) REFERENCES users (id)
     )
   `);
-  console.log('✅ Loans table ready');
+  console.log('Loans table ready');
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS payments (
@@ -54,27 +93,22 @@ function initializeDatabase() {
       FOREIGN KEY (loan_id) REFERENCES loans (id)
     )
   `);
-  console.log('✅ Payments table ready');
+  console.log('Payments table ready');
 
   // Insert sample data
   insertSampleData();
 }
 
 function insertSampleData() {
-  console.log('📝 Inserting sample data...');
+  console.log('Inserting sample data...');
 
   // Insert demo user
-  db.prepare(`
-    INSERT OR IGNORE INTO users (id, email, name, credit_score, has_active_loan)
-    VALUES (1, 'demo@bree.co', 'Demo User', 720, 1)
-  `).run();
+  db.run(
+    `INSERT OR IGNORE INTO users (id, email, name, credit_score, has_active_loan) VALUES (?, ?, ?, ?, ?)`,
+    [1, 'demo@bree.co', 'Demo User', 720, 1]
+  );
 
   // Insert additional test users
-  const userStmt = db.prepare(`
-    INSERT OR IGNORE INTO users (id, email, name, credit_score, has_active_loan)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-
   const testUsers = [
     [2, 'john.doe@example.com', 'John Doe', 680, 0],
     [3, 'jane.smith@example.com', 'Jane Smith', 750, 1],
@@ -82,7 +116,12 @@ function insertSampleData() {
     [5, 'alice.brown@example.com', 'Alice Brown', 710, 0]
   ];
 
-  testUsers.forEach(user => userStmt.run(...user));
+  testUsers.forEach(user => {
+    db.run(
+      `INSERT OR IGNORE INTO users (id, email, name, credit_score, has_active_loan) VALUES (?, ?, ?, ?, ?)`,
+      user
+    );
+  });
 
   // Insert sample loan history for demo user
   const sampleLoans = [
@@ -94,13 +133,11 @@ function insertSampleData() {
     { user_id: 1, amount: 350, tip: 35, due_date: '2026-03-17', status: 'approved', risk_level: 'Low Risk', delivery_method: 'express', delivery_fee: 8.49, created_at: '2026-03-01 09:00:00' }
   ];
 
-  const loanStmt = db.prepare(`
-    INSERT OR IGNORE INTO loans (user_id, amount, tip, due_date, status, risk_level, delivery_method, delivery_fee, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
   sampleLoans.forEach(loan => {
-    loanStmt.run(loan.user_id, loan.amount, loan.tip, loan.due_date, loan.status, loan.risk_level, loan.delivery_method, loan.delivery_fee, loan.created_at);
+    db.run(
+      `INSERT OR IGNORE INTO loans (user_id, amount, tip, due_date, status, risk_level, delivery_method, delivery_fee, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [loan.user_id, loan.amount, loan.tip, loan.due_date, loan.status, loan.risk_level, loan.delivery_method, loan.delivery_fee, loan.created_at]
+    );
   });
 
   // Insert sample payments
@@ -112,16 +149,16 @@ function insertSampleData() {
     { loan_id: 5, amount: 275, payment_date: '2026-02-15', status: 'completed' }
   ];
 
-  const paymentStmt = db.prepare(`
-    INSERT OR IGNORE INTO payments (loan_id, amount, payment_date, status)
-    VALUES (?, ?, ?, ?)
-  `);
+  samplePayments.forEach(p => {
+    db.run(
+      `INSERT OR IGNORE INTO payments (loan_id, amount, payment_date, status) VALUES (?, ?, ?, ?)`,
+      [p.loan_id, p.amount, p.payment_date, p.status]
+    );
+  });
 
-  samplePayments.forEach(p => paymentStmt.run(p.loan_id, p.amount, p.payment_date, p.status));
-
-  console.log('✅ Sample data inserted successfully');
-  console.log('👤 Demo user: demo@bree.co (ID: 1, Credit Score: 720)');
-  console.log('💰 Sample loan history created for testing');
+  console.log('Sample data inserted successfully');
+  console.log('Demo user: demo@bree.co (ID: 1, Credit Score: 720)');
+  console.log('Sample loan history created for testing');
 }
 
 // Get database instance
@@ -132,23 +169,7 @@ function getDb() {
   return db;
 }
 
-// Close database connection
-function closeDatabase() {
-  if (db) {
-    db.close();
-    console.log('🔒 Database connection closed.');
-  }
-}
-
-// Handle graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n🛑 Shutting down gracefully...');
-  closeDatabase();
-  process.exit(0);
-});
-
 module.exports = {
   initializeDatabase,
-  getDb,
-  closeDatabase
+  getDb
 };

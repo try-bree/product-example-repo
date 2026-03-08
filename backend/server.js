@@ -28,7 +28,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 // Request logging middleware
 app.use((req, res, next) => {
   const timestamp = new Date().toISOString();
-  console.log(`📝 [${timestamp}] ${req.method} ${req.url}`);
+  console.log(`[${timestamp}] ${req.method} ${req.url}`);
 
   // Log request body for POST requests (excluding sensitive data)
   if (req.method === 'POST' && req.body) {
@@ -41,9 +41,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Initialize database on startup
-initializeDatabase();
-
 // Basic health check
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', message: 'Bree Interview Backend is running' });
@@ -54,7 +51,7 @@ app.get('/api/users/:id', (req, res) => {
   const db = getDb();
   const userId = req.params.id;
 
-  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  const row = db.get('SELECT * FROM users WHERE id = ?', [userId]);
   if (!row) {
     res.status(404).json({ error: 'User not found' });
     return;
@@ -67,10 +64,10 @@ app.post('/api/check-eligibility', (req, res) => {
   const { userId, amount } = req.body;
   const db = getDb();
 
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  const user = db.get('SELECT * FROM users WHERE id = ?', [userId]);
 
   if (!user) {
-    console.log(`❌ Eligibility check failed - User ${userId} not found`);
+    console.log(`Eligibility check failed - User ${userId} not found`);
     res.status(404).json({ error: 'User not found' });
     return;
   }
@@ -90,7 +87,7 @@ app.post('/api/check-eligibility', (req, res) => {
     reason = 'Amount exceeds maximum';
   }
 
-  console.log(`${eligible ? '✅' : '❌'} Eligibility check for user ${userId}, amount $${amount}: ${eligible ? 'ELIGIBLE' : reason}`);
+  console.log(`Eligibility check for user ${userId}, amount $${amount}: ${eligible ? 'ELIGIBLE' : reason}`);
 
   res.json({
     eligible,
@@ -105,21 +102,22 @@ app.post('/api/loans', (req, res) => {
   const { userId, amount, tip, dueDate, riskLevel, deliveryMethod = 'standard', deliveryFee = 0 } = req.body;
   const db = getDb();
 
-  console.log(`💰 Creating loan for user ${userId}: $${amount} (tip: $${tip || 0}, risk: ${riskLevel})`);
+  console.log(`Creating loan for user ${userId}: $${amount} (tip: $${tip || 0}, risk: ${riskLevel})`);
 
-  const result = db.prepare(`
-    INSERT INTO loans (user_id, amount, tip, due_date, risk_level, delivery_method, delivery_fee, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))
-  `).run(userId, amount, tip || 0, dueDate, riskLevel, deliveryMethod, deliveryFee);
+  const result = db.run(
+    `INSERT INTO loans (user_id, amount, tip, due_date, risk_level, delivery_method, delivery_fee, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))`,
+    [userId, amount, tip || 0, dueDate, riskLevel, deliveryMethod, deliveryFee]
+  );
 
-  console.log(`✅ Loan created successfully - ID: ${result.lastInsertRowid}`);
+  console.log(`Loan created successfully - ID: ${result.lastInsertRowid}`);
 
   // Get the created loan
-  const loan = db.prepare('SELECT * FROM loans WHERE id = ?').get(result.lastInsertRowid);
+  const loan = db.get('SELECT * FROM loans WHERE id = ?', [result.lastInsertRowid]);
 
   // Update user to have active loan
-  db.prepare('UPDATE users SET has_active_loan = 1 WHERE id = ?').run(userId);
-  console.log(`👤 Updated user ${userId} to have active loan`);
+  db.run('UPDATE users SET has_active_loan = 1 WHERE id = ?', [userId]);
+  console.log(`Updated user ${userId} to have active loan`);
 
   res.status(201).json(convertLoanFields(loan));
 });
@@ -134,7 +132,7 @@ app.get('/api/loans', (req, res) => {
     return;
   }
 
-  const rows = db.prepare('SELECT * FROM loans WHERE user_id = ? ORDER BY created_at DESC').all(userId);
+  const rows = db.all('SELECT * FROM loans WHERE user_id = ? ORDER BY created_at DESC', [userId]);
   res.json(rows.map(convertLoanFields));
 });
 
@@ -143,7 +141,7 @@ app.get('/api/loans/:id', (req, res) => {
   const loanId = req.params.id;
   const db = getDb();
 
-  const loan = db.prepare('SELECT * FROM loans WHERE id = ?').get(loanId);
+  const loan = db.get('SELECT * FROM loans WHERE id = ?', [loanId]);
   if (!loan) {
     res.status(404).json({ error: 'Loan not found' });
     return;
@@ -171,30 +169,30 @@ app.post('/api/loans/:id/cancel', (req, res) => {
   const loanId = req.params.id;
   const db = getDb();
 
-  console.log(`🚫 Attempting to cancel loan ${loanId}`);
+  console.log(`Attempting to cancel loan ${loanId}`);
 
-  const loan = db.prepare('SELECT * FROM loans WHERE id = ?').get(loanId);
+  const loan = db.get('SELECT * FROM loans WHERE id = ?', [loanId]);
 
   if (!loan) {
-    console.log(`❌ Loan ${loanId} not found`);
+    console.log(`Loan ${loanId} not found`);
     res.status(404).json({ error: 'Loan not found' });
     return;
   }
 
   if (loan.status !== 'pending') {
-    console.log(`❌ Cannot cancel loan ${loanId} - status is ${loan.status}, must be pending`);
+    console.log(`Cannot cancel loan ${loanId} - status is ${loan.status}, must be pending`);
     res.status(400).json({ error: `Cannot cancel ${loan.status} loan. Only pending loans can be canceled.` });
     return;
   }
 
-  db.prepare('UPDATE loans SET status = ? WHERE id = ?').run('canceled', loanId);
-  console.log(`✅ Loan ${loanId} canceled successfully`);
+  db.run('UPDATE loans SET status = ? WHERE id = ?', ['canceled', loanId]);
+  console.log(`Loan ${loanId} canceled successfully`);
 
   // Check if user has any other active loans
-  const result = db.prepare('SELECT COUNT(*) as count FROM loans WHERE user_id = ? AND status IN (?, ?)').get(loan.user_id, 'pending', 'approved');
+  const result = db.get('SELECT COUNT(*) as count FROM loans WHERE user_id = ? AND status IN (?, ?)', [loan.user_id, 'pending', 'approved']);
   if (result.count === 0) {
-    db.prepare('UPDATE users SET has_active_loan = 0 WHERE id = ?').run(loan.user_id);
-    console.log(`👤 Updated user ${loan.user_id} - no more active loans`);
+    db.run('UPDATE users SET has_active_loan = 0 WHERE id = ?', [loan.user_id]);
+    console.log(`Updated user ${loan.user_id} - no more active loans`);
   }
 
   res.json({ success: true, message: 'Loan canceled successfully' });
@@ -206,46 +204,46 @@ app.post('/api/loans/:id/payback', (req, res) => {
   const { amount } = req.body;
   const db = getDb();
 
-  console.log(`💰 Attempting to pay back loan ${loanId} with amount $${amount}`);
+  console.log(`Attempting to pay back loan ${loanId} with amount $${amount}`);
 
-  const loan = db.prepare('SELECT * FROM loans WHERE id = ?').get(loanId);
+  const loan = db.get('SELECT * FROM loans WHERE id = ?', [loanId]);
 
   if (!loan) {
-    console.log(`❌ Loan ${loanId} not found`);
+    console.log(`Loan ${loanId} not found`);
     res.status(404).json({ error: 'Loan not found' });
     return;
   }
 
   if (loan.status !== 'approved') {
-    console.log(`❌ Cannot pay back loan ${loanId} - status is ${loan.status}, must be approved`);
+    console.log(`Cannot pay back loan ${loanId} - status is ${loan.status}, must be approved`);
     res.status(400).json({ error: `Cannot pay back ${loan.status} loan. Only approved loans can be paid back.` });
     return;
   }
 
   const totalOwed = loan.amount + loan.tip + (loan.delivery_fee || 0);
   if (amount < totalOwed) {
-    console.log(`❌ Payment amount $${amount} is less than total owed $${totalOwed}`);
+    console.log(`Payment amount $${amount} is less than total owed $${totalOwed}`);
     res.status(400).json({ error: `Payment amount $${amount} is insufficient. Total owed: $${totalOwed}` });
     return;
   }
 
   // Record payment and mark loan as paid
-  const paymentResult = db.prepare(`
-    INSERT INTO payments (loan_id, amount, payment_date, status)
-    VALUES (?, ?, datetime('now'), 'completed')
-  `).run(loanId, amount);
+  const paymentResult = db.run(
+    `INSERT INTO payments (loan_id, amount, payment_date, status) VALUES (?, ?, datetime('now'), 'completed')`,
+    [loanId, amount]
+  );
 
-  console.log(`💳 Payment recorded - ID: ${paymentResult.lastInsertRowid}`);
+  console.log(`Payment recorded - ID: ${paymentResult.lastInsertRowid}`);
 
   // Update loan status to paid
-  db.prepare('UPDATE loans SET status = ? WHERE id = ?').run('paid', loanId);
-  console.log(`✅ Loan ${loanId} marked as paid`);
+  db.run('UPDATE loans SET status = ? WHERE id = ?', ['paid', loanId]);
+  console.log(`Loan ${loanId} marked as paid`);
 
   // Check if user has any other active loans
-  const result = db.prepare('SELECT COUNT(*) as count FROM loans WHERE user_id = ? AND status IN (?, ?)').get(loan.user_id, 'pending', 'approved');
+  const result = db.get('SELECT COUNT(*) as count FROM loans WHERE user_id = ? AND status IN (?, ?)', [loan.user_id, 'pending', 'approved']);
   if (result.count === 0) {
-    db.prepare('UPDATE users SET has_active_loan = 0 WHERE id = ?').run(loan.user_id);
-    console.log(`👤 Updated user ${loan.user_id} - no more active loans`);
+    db.run('UPDATE users SET has_active_loan = 0 WHERE id = ?', [loan.user_id]);
+    console.log(`Updated user ${loan.user_id} - no more active loans`);
   }
 
   res.json({
@@ -262,7 +260,7 @@ app.put('/api/loans/:id/status', (req, res) => {
   const { status } = req.body;
   const db = getDb();
 
-  console.log(`📝 Updating loan ${loanId} status to ${status}`);
+  console.log(`Updating loan ${loanId} status to ${status}`);
 
   const validStatuses = ['pending', 'approved', 'rejected', 'paid', 'canceled', 'defaulted'];
   if (!validStatuses.includes(status)) {
@@ -270,24 +268,24 @@ app.put('/api/loans/:id/status', (req, res) => {
     return;
   }
 
-  const result = db.prepare('UPDATE loans SET status = ? WHERE id = ?').run(status, loanId);
+  const result = db.run('UPDATE loans SET status = ? WHERE id = ?', [status, loanId]);
 
   if (result.changes === 0) {
-    console.log(`❌ Loan ${loanId} not found`);
+    console.log(`Loan ${loanId} not found`);
     res.status(404).json({ error: 'Loan not found' });
     return;
   }
 
-  console.log(`✅ Loan ${loanId} status updated to ${status}`);
+  console.log(`Loan ${loanId} status updated to ${status}`);
 
   // Update user's active loan status when loan is no longer active
   if (['rejected', 'canceled', 'paid', 'defaulted'].includes(status)) {
-    const loan = db.prepare('SELECT user_id FROM loans WHERE id = ?').get(loanId);
+    const loan = db.get('SELECT user_id FROM loans WHERE id = ?', [loanId]);
     if (loan) {
-      const activeCount = db.prepare('SELECT COUNT(*) as count FROM loans WHERE user_id = ? AND status IN (?, ?)').get(loan.user_id, 'pending', 'approved');
+      const activeCount = db.get('SELECT COUNT(*) as count FROM loans WHERE user_id = ? AND status IN (?, ?)', [loan.user_id, 'pending', 'approved']);
       if (activeCount.count === 0) {
-        db.prepare('UPDATE users SET has_active_loan = 0 WHERE id = ?').run(loan.user_id);
-        console.log(`👤 Updated user ${loan.user_id} - no more active loans after ${status}`);
+        db.run('UPDATE users SET has_active_loan = 0 WHERE id = ?', [loan.user_id]);
+        console.log(`Updated user ${loan.user_id} - no more active loans after ${status}`);
       }
     }
   }
@@ -326,9 +324,12 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Bree Interview Backend running on http://localhost:${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health`);
-  console.log(`💰 API Base: http://localhost:${PORT}/api`);
-});
+// Start server (async because sql.js init is async)
+(async () => {
+  await initializeDatabase();
+  app.listen(PORT, () => {
+    console.log(`Bree Interview Backend running on http://localhost:${PORT}`);
+    console.log(`Health check: http://localhost:${PORT}/health`);
+    console.log(`API Base: http://localhost:${PORT}/api`);
+  });
+})();
