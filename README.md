@@ -43,10 +43,10 @@ You have the existing codebase (frontend + backend) and ~25 minutes of implement
 ```
 cd backend
 npm install    # first time only
-npm start      # runs on http://localhost:3001
+npm run dev    # runs on http://localhost:3001 (auto-restarts on changes)
 ```
 
-Uses SQLite (auto-created on startup). To reset the database, delete `backend/interview.db` and restart the server.
+Uses an in-memory SQLite database that seeds fresh data on every server start.
 
 ### Frontend
 
@@ -154,5 +154,5 @@ const { user, currentLoan, loanHistory, loading, error } = useApp()
 
 - **Modify the backend freely** — change endpoints, add new ones, update the schema
 - **The Admin tab** is useful for approving test loans during development
-- **To reset everything**, delete `backend/interview.db` and restart the backend
+- **To reset data**, just restart the backend — the in-memory database re-seeds automatically
 - **AI tools are welcome** — use whatever you'd normally use in your workflow
